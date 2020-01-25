@@ -11,6 +11,45 @@ MATLAB .mat format data files containing an array X of points and Y of function 
 generates "run_data.mat" and "ensemble_data.mat" files containing information about the runs
 and testing data, respectively.
 
+## Use
+
+Arguments are specified on the command line as follows: 
+
+```
+python DNN.py --nb_layers 10 
+              --nb_nodes_per_layer 100 
+              --nb_train_points 750 
+              --train_pointset uniform_random 
+              --nb_epochs 50000 
+              --batch_size 750 
+              --nb_trials 20 
+              --train 0 
+              --make_plots 0 
+              --nb_test_points 609025 
+              --test_pointset CC_sparse_grid 
+              --blocktype default 
+              --activation relu 
+              --example exp_cos 
+              --optimizer Adam 
+              --quiet 0 
+              --input_dim 8 
+              --output_dim 1 
+              --MATLAB_data 1 
+              --trial_num 1 
+              --precision single 
+              --run_ID test_exp_cos 
+              --use_regularizer 0 
+              --reg_lambda 1e-3 
+              --error_tol 5e-7 
+              --initializer normal 
+              --sigma 1e-1 
+              --lrn_rate_schedule exp_decay
+```
+
+We also include a bash script "run_train_test_local.sh" to simplify running ensembles of runs in testing DNN performance.
+
+## Examples
+
 Training a ReLU network with 2 layers and 200 nodes per layer:
 ![training a ReLU network with 2 layers and 200 nodes per layer](https://github.com/ndexter/MLFA/blob/master/images/relu_NN_2x200.gif)
 
