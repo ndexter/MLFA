@@ -11,3 +11,8 @@ MATLAB .mat format data files containing an array X of points and Y of function 
 generates "run_data.mat" and "ensemble_data.mat" files containing information about the runs
 and testing data, respectively.
 
+Training a ReLU network with 2 layers and 200 nodes per layer:
+![training a ReLU network with 2 layers and 200 nodes per layer](https://github.com/ndexter/MLFA/blob/master/images/relu_NN_2x200.gif)
+
+Difficulty of approximating a piecewise continuous function with a ReLU DNN with 15 layers and 200 nodes per layer:
+![difficulty of approximating a piecewise continuous function with a ReLU DNN](https://github.com/ndexter/MLFA/blob/master/images/piecewise_function_opt_difficulties.gif)
