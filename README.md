@@ -55,3 +55,9 @@ Difficulty of approximating a piecewise continuous function with a ReLU DNN with
 
 Training a ReLU network with 2 layers and 200 nodes per layer:
 ![training a ReLU network with 2 layers and 200 nodes per layer](https://github.com/ndexter/MLFA/blob/master/images/relu_NN_2x200.gif)
+
+Training a ReLU network to approximate a smooth function:
+![training a relu network to approximate a smooth function](https://github.com/ndexter/MLFA/blob/master/images/smooth_function.gif)
+
+Training a ReLU network to approximate a more oscillatory function:
+![oscillatory function](https://github.com/ndexter/MLFA/blob/master/images/smooth_oscillatory_function.gif)
