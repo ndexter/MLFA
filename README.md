@@ -46,7 +46,11 @@ python DNN.py --nb_layers 10
               --lrn_rate_schedule exp_decay
 ```
 
-We also include a bash script "run_train_test_local.sh" to simplify running ensembles of runs in testing DNN performance.
+We also include a shell script "run_train_test_local.sh" to simplify running ensembles of trials in testing DNN performance. To use the script, modify the variables as desired and type:
+
+```
+bash run_train_test_local.sh
+```
 
 ## Examples
 
