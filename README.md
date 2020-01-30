@@ -9,11 +9,11 @@ Various building-blocks are available for constructing the networks, including t
 activation block and ResNet blocks in resnet_v1 and resnet_v2. The DNN code accepts
 MATLAB .mat format data files containing an array X of points and Y of function values, and
 generates "run_data.mat" and "ensemble_data.mat" files containing information about the runs
-and testing data, respectively.
+and testing data, respectively. 
 
 ## Use
 
-Arguments are specified on the command line as follows: 
+This package is compatible with version 1.13 of Tensorflow. Arguments are specified on the command line as follows: 
 
 ```
 python DNN.py --nb_layers 10 
