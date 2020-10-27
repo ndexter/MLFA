@@ -1,14 +1,14 @@
 # import standard libraries
 import time, os, argparse, io, shutil, sys, math, socket
 
-# import tensorflow numpy and matplotlib
+# import tensorflow, numpy, matplotlib, and scipy io
 import tensorflow as tf
 from tensorflow.python.saved_model import tag_constants
 from tensorflow.python.framework import ops
 import numpy as np
 import hdf5storage
 import matplotlib
-matplotlib.use('Agg')
+#matplotlib.use('Agg')
 import scipy.io as sio
 
 # import plotting and data-manipulation tools
@@ -25,85 +25,93 @@ projectdir = '/home/ndexter/projects/def-adcockb/ndexter'
 #projectdir = '/media/nick/Fast Secondary/scratch_backup/scratch'
 
 # ensure matplotlib is using canonical renderer
-#matplotlib.get_backend()
+matplotlib.get_backend()
 
 np_d_sqrt_exp_lambdafunc = lambda x: np_d_sqrt_exp(x).astype(np.float32)
 
 sigma = 0.1 
 
-def Reader(reader):
-
-    x_in = []
-
-    with open(reader) as csvfile:
-        reader = csv.reader(csvfile)
-
-        for row in reader:
-            x_in = np.append(x_in, [row])
-
-    x_in = x_in.astype(float)
-
-    return x_in
 
 def get_batch(X_in, Y_in, batch_size):
-    X_cols = X_in.shape[0]
-    Y_cols = Y_in.shape[0]
-    #print(X_in.shape)
-    #print(Y_in.shape)
-    #print(X_cols)
-    #print(Y_cols)
-    for i in range(X_in.shape[1]//batch_size):
-        idx = i*batch_size + np.random.randint(0,10,(1))[0]
+    """
+    Implementation of batching with random shuffling for training DNNs on 
+    subsets of data
 
-        #print('batch ' + str(i) + ' sizes')
-        #print(X_in.take(range(idx,idx+batch_size), axis = 1, mode = 'wrap').reshape(X_cols,batch_size).shape)
-        #print(Y_in.take(range(idx,idx+batch_size), axis = 1, mode = 'wrap').reshape(Y_cols,batch_size).shape)
+    Args:
+        X_in: the points 
+        Y_in: the value of the function at the points
+        batch_size: the desired size of the batches 
 
-        yield X_in.take(range(idx,idx+batch_size), axis = 1, mode = 'wrap').reshape(X_cols,batch_size), \
-              Y_in.take(range(idx,idx+batch_size), axis = 1, mode = 'wrap').reshape(Y_cols,batch_size)
+    Returns:
+        generator yielding the batches created from X_in and Y_in
+    """
+
+    # get the shapes of the input data,
+    # here the first dimension is the dimensionality 
+    # of the points and output function, while the second
+    # is the number of samples
+    X_rows = X_in.shape[0]
+    Y_rows = Y_in.shape[0]
+
+    X_cols = X_in.shape[1]
+    Y_cols = Y_in.shape[1]
+    
+    # randomly shuffle the temporary variables along the columns
+    shuffler = np.random.permutation(X_cols)
+    Xtmp = X_in[:,shuffler]
+    Ytmp = Y_in[:,shuffler]
+
+    # iterate over the number of samples divided by the batch size
+    for i in range(X_cols//batch_size):
+
+        # get the index
+        idx = i*batch_size
+
+        # generator to return the batches
+        yield Xtmp.take(range(idx,idx+batch_size), axis = 1, mode = 'wrap').reshape(X_rows,batch_size), \
+              Ytmp.take(range(idx,idx+batch_size), axis = 1, mode = 'wrap').reshape(Y_rows,batch_size)
 
 def default_block(x, layer, dim1, dim2, weight_bias_initializer, rho = tf.nn.relu, precision = tf.float64):
     """ 
-    Implementation of a simple ReLU(W*x+b) layer
+    Implementation of a simple rho(W*x+b) layer
 
     Args:
         x: a tensor
         layer: current layer (used in naming)
         dim1: dimension of the input layer
         dim2: dimension of the output layer
+        weight_bias_initializer: the initializer to use, e.g., normal, uniform, constant
+        rho: the activation to apply (default relu)
+        precision: either tf.float64 (double) or tf.float32 (single)
 
     Returns:
         Output tensor resulting from the block operations
     """
+
     # weights for current layer
     W = tf.get_variable(name = 'l' + str(layer) + '_W', shape = [dim1, dim2],
             initializer = weight_bias_initializer, dtype = precision)
-    #W = tf.get_variable(name = 'l' + str(layer) + '_W', shape = [dim1, dim2],
-            #initializer = weight_bias_initializer
     # biases for current layer
     b = tf.get_variable(name = 'l' + str(layer) + '_b', shape = [dim2, 1], 
             initializer = weight_bias_initializer, dtype = precision)
-    #b = tf.get_variable(name = 'l' + str(layer) + '_b', shape = [dim2], 
-            #initializer = tf.constant_initializer(0.0))
 
-    #print('l' + str(layer) + '_W shape = ')
-    #print(W.shape)
-    #print('x shape = ')
-    #print(x.shape)
-    #print('l' + str(layer) + '_b shape = ')
-    #print(b.shape)
-
+    # return the activation of the linear map
     return rho(tf.matmul(W, x) + b)
+
 
 def poly_block(x, layer, dim1, dim2, weight_bias_initializer, order = 2, rho = tf.nn.relu, precision = tf.float64):
     """ 
-    Implementation of a simple ReLU(W*x+b) layer
+    Implementation of a power of a ReLU(W*x+b) layer
 
     Args:
         x: a tensor
         layer: current layer (used in naming)
         dim1: dimension of the input layer
         dim2: dimension of the output layer
+        weight_bias_initializer: the initializer to use, e.g., normal, uniform, constant
+        order: the order of the power to apply to the activation (default 2)
+        rho: the activation to apply (default relu)
+        precision: either tf.float64 (double) or tf.float32 (single)
 
     Returns:
         Output tensor resulting from the block operations
@@ -112,61 +120,16 @@ def poly_block(x, layer, dim1, dim2, weight_bias_initializer, order = 2, rho = t
     W = tf.get_variable(name = 'l' + str(layer) + '_W', shape = [dim1, dim2],
             initializer = weight_bias_initializer, dtype = precision)
 
-    #V = tf.get_variable(name = 'l' + str(layer) + '_V', shape = [dim1, dim2],
-            #initializer = weight_bias_initializer, dtype = precision)
-
     # biases for current layer
     b = tf.get_variable(name = 'l' + str(layer) + '_b', shape = [dim2, 1], 
             initializer = weight_bias_initializer, dtype = precision)
-    #b = tf.get_variable(name = 'l' + str(layer) + '_b', shape = [dim2], 
-            #initializer = tf.constant_initializer(0.0))
 
-    #print('l' + str(layer) + '_W shape = ')
-    #print(W.shape)
-    #print('x shape = ')
-    #print(x.shape)
-    #print('l' + str(layer) + '_b shape = ')
-    #print(b.shape)
-
+    # the linear mapping
     z = tf.matmul(W, x) + b
-    return tf.pow(rho(z), order) #z #tf.exp(rho(z)) #tf.abs(z) #tf.pow(rho(z) + rho(-z), order)
-    #return rho(tf.matmul(V, tf.pow(x, order)) + tf.matmul(W, x) + b)
 
-def legendre_block(x, layer, dim1, dim2, weight_bias_initializer, rho = tf.nn.relu, precision = tf.float64):
-    """ 
-    Implementation of a simple ReLU(W*x+b) layer
+    # return a power of the activation of the linear map
+    return tf.pow(rho(z), order) 
 
-    Args:
-        x: a tensor
-        layer: current layer (used in naming)
-        dim1: dimension of the input layer
-        dim2: dimension of the output layer
-
-    Returns:
-        Output tensor resulting from the block operations
-    """
-    # weights for current layer
-    W = tf.get_variable(name = 'l' + str(layer) + '_W', shape = [dim1, dim2],
-            initializer = weight_bias_initializer, dtype = precision)
-
-
-    # biases for current layer
-    b = tf.get_variable(name = 'l' + str(layer) + '_b', shape = [dim2, 1], 
-            initializer = weight_bias_initializer, dtype = precision)
-
-    #print(x.shape)
-
-    if layer == 0:
-        return tf.ones(shape = [dim2, None], dtype = precision)
-    elif layer == 1:
-        return x
-    else:
-        return (2*layer+1)/(layer+1)*x*legendre_block(x,layer-1,dim1,dim2, weight_bias_initializer,rho=rho,precision=precision) - layer/(layer+1)*legendre_block(x,layer-2,dim1,dim2, weight_bias_initializer,rho=rho,precision=precision)
-        #return (2*layer+1)/(layer+1)*tf.pow(x,2) - tf.ones(shape = [dim2, None], dtype = precision)/(layer+1)
-    #elif layer ==2:
-    #z = tf.matmul(W, x) + b
-    #return tf.pow(rho(z), order) #z #tf.exp(rho(z)) #tf.abs(z) #tf.pow(rho(z) + rho(-z), order)
-    #return rho(tf.matmul(V, tf.pow(x, order)) + tf.matmul(W, x) + b)
 
 def resnet_building_block_v1(x, layer, dim1, dim2, weight_bias_initializer, rho = tf.nn.relu, precision = tf.float64):
     """ 
@@ -181,6 +144,9 @@ def resnet_building_block_v1(x, layer, dim1, dim2, weight_bias_initializer, rho 
         layer: current layer (used in naming)
         dim1: dimension of the input layer
         dim2: dimension of the output layer
+        weight_bias_initializer: the initializer to use, e.g., normal, uniform, constant
+        rho: the activation to apply (default relu)
+        precision: either tf.float64 (double) or tf.float32 (single)
 
     Returns:
         Output tensor resulting from the block operations
@@ -197,14 +163,15 @@ def resnet_building_block_v1(x, layer, dim1, dim2, weight_bias_initializer, rho 
     b = tf.get_variable(name = 'l' + str(layer) + '_b', shape = [dim2, 1], 
             initializer = weight_bias_initializer, dtype = precision)
 
-    # F(x) = rho(W*x + b)
+    # activated linear mapping
     x = rho(tf.matmul(W, x) + b)
 
     # Identity skips previous operation
     x = x + s
 
-    # return ReLU((F + Id)(x))
+    # apply a final activation to the result
     return rho(x)
+
 
 def resnet_building_block_v2(x, layer, dim1, dim2, weight_bias_initializer, rho = tf.nn.relu, precision = tf.float64):
     """ 
@@ -219,6 +186,9 @@ def resnet_building_block_v2(x, layer, dim1, dim2, weight_bias_initializer, rho 
         layer: current layer (used in naming)
         dim1: dimension of the input layer
         dim2: dimension of the output layer
+        weight_bias_initializer: the initializer to use, e.g., normal, uniform, constant
+        rho: the activation to apply (default relu)
+        precision: either tf.float64 (double) or tf.float32 (single)
 
     Returns:
         Output tensor resulting from the block operations
@@ -235,11 +205,12 @@ def resnet_building_block_v2(x, layer, dim1, dim2, weight_bias_initializer, rho 
     b = tf.get_variable(name = 'l' + str(layer) + '_b', shape = [dim2, 1], 
             initializer = weight_bias_initializer, dtype = precision)
 
-    # F(x) = ReLU(W*x + b)
+    # activated linear mapping
     z = rho(tf.matmul(W, x) + b)
 
-    # return (F + Id)(x)
+    # apply the skip connection after activation
     return z + s
+
 
 def rankone_block(x, layer, dim1, dim2, weight_bias_initializer, rho = tf.nn.relu, precision = tf.float64):
     """ 
@@ -251,35 +222,27 @@ def rankone_block(x, layer, dim1, dim2, weight_bias_initializer, rho = tf.nn.rel
         layer: current layer (used in naming)
         dim1: dimension of the input layer
         dim2: dimension of the output layer
+        weight_bias_initializer: the initializer to use, e.g., normal, uniform, constant
+        rho: the activation to apply (default relu)
+        precision: either tf.float64 (double) or tf.float32 (single)
 
     Returns:
         Output tensor resulting from the block operations
     """
+
     # weights for current layer
     w1 = tf.get_variable(name = 'l' + str(layer) + '_w1', shape = [dim1, 1],
             initializer = weight_bias_initializer, dtype = precision)
-    # weights for current layer
-    #w2 = tf.get_variable(name = 'l' + str(layer) + '_w2', shape = [dim1, 1],
-    #        initializer = weight_bias_initializer, dtype = precision)
 
     # biases for current layer
     b = tf.get_variable(name = 'l' + str(layer) + '_b', shape = [dim2, 1], 
             initializer = weight_bias_initializer, dtype = precision)
 
+    # take the dot product of w1 with x
     c = tf.tensordot(tf.transpose(w1),x,1)
 
-    #print('w1 shape = ')
-    #print(w1.shape)
-    #print('x shape = ')
-    #print(x.shape)
-    #print('tensordot result shape = ')
-    #print(c.shape)
-
+    # return the activated result
     return rho(c*w1 + b)
-
-    #W = tf.matmul(w1, tf.transpose(w1)) #+ tf.matmul(w2, tf.transpose(w2))
-
-    #return rho(tf.matmul(W, x) + b)
 
 
 def CS_block(x, W, b, layer, dim1, dim2, weight_bias_initializer, rho = tf.nn.relu, precision = tf.float64):
@@ -293,21 +256,21 @@ def CS_block(x, W, b, layer, dim1, dim2, weight_bias_initializer, rho = tf.nn.re
         layer: current layer (used in naming)
         dim1: dimension of the input layer
         dim2: dimension of the output layer
-        rho: the activation function
-        precision: working precision
+        weight_bias_initializer: the initializer to use, e.g., normal, uniform, constant
+        rho: the activation to apply (default relu)
+        precision: either tf.float64 (double) or tf.float32 (single)
 
     Returns:
         Output tensor resulting from the block operations
     """
-    ## biases for current layer
-    #b = tf.get_variable(name = 'l' + str(layer) + '_b', shape = [dim2, 1], 
-            #initializer = weight_bias_initializer, dtype = precision)
 
+    # apply the default mapping with the passed-in W and b
     return rho(tf.matmul(W, x) + b)
+
 
 def CS_block_v2(x, W, layer, dim1, dim2, weight_bias_initializer, rho = tf.nn.relu, precision = tf.float64):
     """ 
-    Implementation of a stacked layer with the same weight matrix/bias 
+    Implementation of a block re-using the weight matrix W but a new bias vector b
 
     Args:
         x: a tensor
@@ -316,20 +279,26 @@ def CS_block_v2(x, W, layer, dim1, dim2, weight_bias_initializer, rho = tf.nn.re
         layer: current layer (used in naming)
         dim1: dimension of the input layer
         dim2: dimension of the output layer
-        rho: the activation function
-        precision: working precision
+        weight_bias_initializer: the initializer to use, e.g., normal, uniform, constant
+        rho: the activation to apply (default relu)
+        precision: either tf.float64 (double) or tf.float32 (single)
 
     Returns:
         Output tensor resulting from the block operations
     """
+
     ## biases for current layer
     b = tf.get_variable(name = 'l' + str(layer) + '_b', shape = [dim2, 1], 
             initializer = weight_bias_initializer, dtype = precision)
 
+    # apply the default mapping with the passed-in W
     return rho(tf.matmul(W, x) + b)
 
 
 def sqrt_exp(x):
+    """
+    test function
+    """
     a = 1.00
     k = a
     lam = a
@@ -337,43 +306,35 @@ def sqrt_exp(x):
     return a*tf.pow(x,k)*tf.exp(lam*x)
 
 def soft_threshold(x):
+    """
+    test function
+    """
     tau = 1.500
     return 2.0*(tf.nn.relu(x-tau) - tf.nn.relu(-x-tau))
 
-#def d_sqrt_exp(x):
-#    a = 0.5
-#    k = a
-#    lam = a
-#    return a*np.exp(lam*x)*k*np.pow(x,k-1.0) + a*np.exp(lam*x)*lam*np.pow(x,k)
-#
-#def tf_d_sqrt_exp(x, name = None):
-#    with tf.name_scope(name, "d_sqrt_exp", [x]) as name:
-#        y = tf.py_func(np_d_sqrt_exp_lambdafunc, 
-#                       [x],
-#                       [tf.float32],
-#                       name = name,
-#                       stateful = False)
-#        return y[0]
-#
-#def sqrt_exp_grad(op, grad)
-#    x = op.inputs[0]
-#    n_gr = tf_d_sqrt_exp(x)
-#    return grad*n_gr
-#
-#def py_func(func, inp, Tout, stateful=True, name=None, grad=None):
-#
-#    # Need to generate a unique name to avoid duplicates:
-#    rnd_name = 'PyFuncGrad' + str(np.random.randint(0, 1E+8))
-#
-#    tf.RegisterGradient(rnd_name)(grad)  # see _MySquareGrad for grad example
-#    g = tf.get_default_graph()
-#    with g.gradient_override_map({"PyFunc": rnd_name}):
-#        return tf.py_func(func, inp, Tout, stateful=stateful, name=name)
 
 def funcApprox(x, layers = 1, input_dim = 1, output_dim = 1, hidden_dim = 200, blocktype = 'default', activation = 'relu', precision = tf.float64, initializer = 'normal'):
+    """
+    The DNN construction method, uses the pre-defined block types to construct the net
+
+    Args:
+        x: a tensor
+        layers: the number of hidden layers (default 1)
+        input_dim: the dimension of the input space for the function (default 1)
+        output_dim: the dimension of the output space for the function (default 1)
+        hidden_dim: the number of nodes on the hidden layers (default 200)
+        blocktype: the type of block to apply on the hidden layers (default 'default' given by rho(W*x+b))
+        activation: the activation function to apply (default relu)
+        precision: either tf.float64 (double) or tf.float32 (single)
+        initializer: the initializer to use for the weights and biases (default normal)
+
+    Output:
+        A tensor representing the output of the neural network architecture
+    """
 
     print('Constructing the tensorflow nn graph')
 
+    # set up the weight and bias initializers from the following choices
     if initializer == 'normal':
         weight_bias_initializer = tf.random_normal_initializer(stddev = sigma, dtype = precision)
     elif initializer == 'uniform':
@@ -383,6 +344,7 @@ def funcApprox(x, layers = 1, input_dim = 1, output_dim = 1, hidden_dim = 200, b
     else: 
         sys.exit('args.initializer must be one of the supported types, e.g., normal, uniform, etc.')
 
+    # set the activation function (assume all layers use same activation
     if activation == 'relu':
         rho = tf.nn.relu
         print('Using ReLU function as activation rho')
@@ -410,6 +372,9 @@ def funcApprox(x, layers = 1, input_dim = 1, output_dim = 1, hidden_dim = 200, b
     elif activation == 'tanh':
         rho = tf.nn.tanh
         print('Using tanh function as activation rho')
+    elif activation == 'sin':
+        rho = tf.math.sin
+        print('Using sin function as activation rho')
     elif activation == 'soft_threshold':
         rho = soft_threshold
         print('Using soft thresholding function as activation rho')
@@ -423,23 +388,22 @@ def funcApprox(x, layers = 1, input_dim = 1, output_dim = 1, hidden_dim = 200, b
     else: 
         sys.exit('args.activation must be one of the supported types, e.g., relu, sigmoid, etc.')
 
+    # construct the network
     with tf.variable_scope('UniversalApproximator', reuse=tf.AUTO_REUSE):
 
-        # input layer description
+        # input layer weights
         in_W = tf.get_variable(name = 'in_W', shape = [hidden_dim, input_dim],
                 initializer = weight_bias_initializer, dtype = precision)
 
+        # input layer biases
         in_b = tf.get_variable(name = 'in_b', shape = [hidden_dim, 1],
                 initializer = weight_bias_initializer, dtype = precision)
 
-        #print('in_W shape = ')
-        #print(in_W.shape)
-        #print('x shape = ')
-        #print(x.shape)
-        #print('in_b shape = ')
-        #print(in_b.shape)
+
+        # apply the first linear mapping
         z = tf.matmul(in_W, x) + in_b
 
+        # apply the activation to the result
         x = rho(z) 
 
         print('input ' + activation + ' layer: ' + str(input_dim) + 'x' + str(hidden_dim))
@@ -447,74 +411,92 @@ def funcApprox(x, layers = 1, input_dim = 1, output_dim = 1, hidden_dim = 200, b
         # initialize the weights/biases first in the CS blocktype
         if blocktype == 'CS':
             opt1 = False
-            # weights for every layer
+            # weights for every layer (reusing same weight matrix)
             W_CS = tf.get_variable(name = 'CS_W', shape = [hidden_dim, hidden_dim],
                     initializer = weight_bias_initializer, dtype = precision)
 
-            # biases for every layer
+            # biases for every layer (reusing same bias vector)
             #b_CS = tf.get_variable(name = 'CS_b', shape = [hidden_dim, 1], 
                     #initializer = weight_bias_initializer, dtype = precision)
+
             for i in range(layers):
                 if opt1:
-                    x = CS_block(x, W_CS, b_CS, i, hidden_dim, hidden_dim, weight_bias_initializer, precision = precision, rho = rho)
+                    x = CS_block(x, W_CS, b_CS, i, hidden_dim, hidden_dim, weight_bias_initializer, 
+                                 precision = precision, rho = rho)
                     choice = 5
-                    print('hidden ' + activation + '_' + blocktype + ' layer ' + str(i) + ': ' + str(hidden_dim) + 'x' + str(hidden_dim) + ' check opt ' + str(choice))
+                    print('hidden ' + activation + '_' + blocktype + ' layer ' + str(i) + ': ' + 
+                          str(hidden_dim) + 'x' + str(hidden_dim) + ' check opt ' + str(choice))
                 else:
-                    x = CS_block_v2(x, W_CS, i, hidden_dim, hidden_dim, weight_bias_initializer, precision = precision, rho = rho)
+                    x = CS_block_v2(x, W_CS, i, hidden_dim, hidden_dim, weight_bias_initializer, 
+                                    precision = precision, rho = rho)
                     choice = 6
-                    print('hidden ' + activation + '_' + blocktype + ' layer ' + str(i) + ': ' + str(hidden_dim) + 'x' + str(hidden_dim) + ' check opt ' + str(choice))
-        else:
-            for i in range(layers):
-                choice = 0
-                if blocktype == 'default':
-                    """
-                    if i < layers-1:
-                        print('WARNING: using nonstandard architecture on layer ' + str(i))
-                        x = default_block(x, i, hidden_dim, hidden_dim, weight_bias_initializer, precision = precision, rho = soft_threshold)
-                    else:
-                        print('WARNING: using nonlinear activation on layer ' + str(i))
-                        x = default_block(x, i, hidden_dim, hidden_dim, weight_bias_initializer, precision = precision, rho = rho)
-                    """
+                    print('hidden ' + activation + '_' + blocktype + ' layer ' + str(i) + ': ' +
+                          str(hidden_dim) + 'x' + str(hidden_dim) + ' check opt ' + str(choice))
 
-                    x = default_block(x, i, hidden_dim, hidden_dim, weight_bias_initializer, precision = precision, rho = rho)
+        # using any other block type than CS
+        else:
+
+            # iterate over the hidden layers
+            for i in range(layers):
+
+                # keeps track (for sanity) of the option applied
+                choice = 0
+
+                # apply the specified blocks to the x output of the first layer 
+                if blocktype == 'default':
+                    x = default_block(x, i, hidden_dim, hidden_dim, weight_bias_initializer, 
+                                      precision = precision, rho = rho)
                     choice = 1
                 elif blocktype == 'resnet_v1':
-                    x = resnet_building_block_v1(x, i, hidden_dim, hidden_dim, weight_bias_initializer, precision = precision, rho = rho)
+                    x = resnet_building_block_v1(x, i, hidden_dim, hidden_dim, weight_bias_initializer, 
+                                                 precision = precision, rho = rho)
                     choice = 2
                 elif blocktype == 'resnet_v2':
-                    x = resnet_building_block_v2(x, i, hidden_dim, hidden_dim, weight_bias_initializer, precision = precision, rho = rho)
+                    x = resnet_building_block_v2(x, i, hidden_dim, hidden_dim, weight_bias_initializer, 
+                                                 precision = precision, rho = rho)
                     choice = 3
                 elif blocktype == 'rankone':
-                    x = rankone_block(x, i, hidden_dim, hidden_dim, weight_bias_initializer, precision = precision, rho = rho)
+                    x = rankone_block(x, i, hidden_dim, hidden_dim, weight_bias_initializer, 
+                                      precision = precision, rho = rho)
                     choice = 4
                 elif blocktype == 'poly':
-                    x = poly_block(x, i, hidden_dim, hidden_dim, weight_bias_initializer, 2, precision = precision, rho = rho)
+                    x = poly_block(x, i, hidden_dim, hidden_dim, weight_bias_initializer, 2, 
+                                   precision = precision, rho = rho)
                     choice = 5
-                elif blocktype == 'legendre':
-                    x = legendre_block(x, i, hidden_dim, hidden_dim, weight_bias_initializer, precision = precision, rho = rho)
-                    choice = 6
 
-                print('hidden ' + activation + '_' + blocktype + ' layer ' + str(i) + ': ' + str(hidden_dim) + 'x' + str(hidden_dim) + ' check opt ' + str(choice))
+                print('hidden ' + activation + '_' + blocktype + ' layer ' + str(i) + ': ' +
+                      str(hidden_dim) + 'x' + str(hidden_dim) + ' check opt ' + str(choice))
 
-        # output layer description
+        # output layer weights
         out_v = tf.get_variable(name = 'out_v', shape = [output_dim, hidden_dim],
                  initializer = weight_bias_initializer, dtype = precision)
 
+        # output layer biases
         out_b = tf.get_variable(name = 'out_b', shape = [output_dim, 1],
                  initializer = weight_bias_initializer, dtype = precision)
 
-        #print(out_v.shape)
-        #print(x.shape)
-
+        # apply the output layer and name it 'output'
         z = tf.add(tf.matmul(out_v, x, name = 'output_vx'), out_b, name = 'output')
-        #z = tf.matmul(out_v, x, name = 'output')
+
         print('output layer: ' + str(hidden_dim) + 'x' + str(output_dim))
 
+        # return the output tensor
         return z
     
 
-# define the function we want to approximate, currently only 1dim functions
 def func_to_approx(x, exmp):
+    """
+    Deprecated method for directly defining functions in python to approximate
+    (now we primarily use datasets to train, so function definitions are not needed)
+    Only 1-dimensional functions are defined
+
+    Args:
+        x: input tensor
+        exmp: which example to use (oscillatory, less_oscillatory, smooth, piecewise, ...)
+
+    Output:
+        The result of applying f(x) for the functions f defined below
+    """
     if exmp == 'oscillatory': # highly oscillatory function
         y = tf.log(tf.sin(100*x) + 2) + tf.sin(10*x)
     elif exmp == 'less_oscillatory': # less oscillatory function, sparse expansion
@@ -526,15 +508,10 @@ def func_to_approx(x, exmp):
         condition2 = tf.less_equal(x,  0.0)
         condition3 = tf.less_equal(x,  0.5)
         y = tf.where(condition1, tf.square(x), tf.where(condition2, x + 5, tf.where(condition3, -x, tf.log(x) + 2)))
-    #elif exmp == '2D_sin_cos':
-        #print('func_to_approx x.shape = ')
-        #print(x.shape)
-        #print(x.shape[0])
-        #print(x.shape[1])
-        #y = tf.sin(tf.slice(x,[0,0],[:,1]))*tf.cos(tf.slice(x,[0,1],[:,1]))
     else:
         sys.exit('args.example must be one of the predefined examples')
 
+    # return the result y = f(x)
     return y
 
 if __name__ == '__main__': 
@@ -543,6 +520,8 @@ if __name__ == '__main__':
     print('Running tensorflow with version:')
     print(tf.__version__)
 
+    # depending on where running, change scratch/project directories
+    # TODO: change these when installed on your local machine!!!
     if socket.gethostname() == 'ubuntu-dev':
         scratchdir = '/home/nick/scratch'
         projectdir = '/home/nick/scratch'
@@ -552,14 +531,7 @@ if __name__ == '__main__':
 
     start_time = time.time()
 
-    #tf.enable_eager_execution()
-    #print('Executing eagerly = ' + str(tf.executing_eagerly()))
-
-    # get directory
-    #print('Directory: ' + dir)
-    #wait = input("PRESS ENTER TO CONTINUE.")
-    #time.sleep(2.0)
-
+    # parse the arguments from the command line
     parser = argparse.ArgumentParser()
     parser.add_argument("--nb_layers", default = 1, type = int, help = "Number of hidden layers")
     parser.add_argument("--nb_nodes_per_layer", default = 10, type = int, help = "Number of nodes per hidden layer")
@@ -593,11 +565,12 @@ if __name__ == '__main__':
 
     print('using ' + args.optimizer + ' optimizer')
 
-
     if args.train:
-        print('batching with ' + str(args.batch_size) + ' out of ' + str(args.nb_train_points) + ' ' + args.train_pointset + ' training points')
+        print('batching with ' + str(args.batch_size) + ' out of ' + 
+              str(args.nb_train_points) + ' ' + args.train_pointset + 
+              ' training points')
 
-    #sigma = np.sqrt(2.0/args.nb_nodes_per_layer)
+    # set the standard deviation for initializing the DNN weights and biases
     if args.initializer == 'normal':
         sigma = float(args.sigma)
         print('initializing (W,b) with N(0, ' + str(sigma) + '^2)')
@@ -608,8 +581,9 @@ if __name__ == '__main__':
         sigma = float(args.sigma)
         print('initializing (W,b) as constant ' + str(sigma))
 
+    # set the precision variable to initialize weights and biases in either double or single precision
     if args.precision == 'double':
-        print('Using double precision') #, WARNING: only using tolerance of 5e-07') # uncomment if using single prec. stop tol.
+        print('Using double precision') 
         precision = tf.float64
         error_tol = float(args.error_tol)
     elif args.precision == 'single':
@@ -617,95 +591,157 @@ if __name__ == '__main__':
         precision = tf.float32
         error_tol = float(args.error_tol)
 
+    # set the unique run ID used in many places, e.g., directory names for output
     if args.run_ID is None:
         unique_run_ID = timestamp
     else:
         unique_run_ID = args.run_ID
 
+    # set the seeds for numpy and tensorflow to ensure all initializations are the same
     np_seed = 0
     tf_seed = 0
-    update_ratio = 0.0625 #normally 0.9
+
+    # set the update ratio for saving the trained model to the disk (i.e., if 
+    # (current error)/(previous save error) <= update_ratio then save the model)
+    update_ratio = 0.0625 
     print('Using checkpoint update ratio = ' + str(update_ratio))
 
+    # record the trial number
     trial = args.trial_num
 
+    # reset the default graph 
     tf.reset_default_graph()
 
+    # unique key for naming results
+    key = args.activation + '_' + args.blocktype + '_' + str(args.nb_layers) + 'x' + \
+          str(args.nb_nodes_per_layer) + '_' + str(args.nb_train_points).zfill(6) + \
+          '_pnts_' + str(error_tol) + '_tol_' + args.optimizer + '_opt'
 
-    key = args.activation + '_' + args.blocktype + '_' + str(args.nb_layers) + 'x' + str(args.nb_nodes_per_layer) + '_' \
-            + str(args.nb_train_points).zfill(6) + '_pnts_' + str(error_tol) + '_tol_' + args.optimizer + '_opt'
+    # the results and scratch directory can be individually specified (however for now they are the same)
     result_folder = scratchdir + '/results/' + unique_run_ID + '/' + key + '/trial_' + str(trial)
     scratch_folder = scratchdir + '/results/' + unique_run_ID + '/' + key + '/trial_' + str(trial)
 
+    # create the result folder if it doesn't exist yet
     if not os.path.exists(result_folder):
         os.makedirs(result_folder)
 
+    # create the scratch folder if it doesn't exist yet
     if not os.path.exists(scratch_folder):
         os.makedirs(scratch_folder)
 
+    # variable holding percentage of testing points with error above 10^{-k} for various thresholds k
     percs = [];
-    y_DNN_test_trials = [];
-    y_DNN_train_trials = [];
+
+    # y true on the testing points
     y_true_test = [];
+
+    # y true on the training points
     y_true_train_trials = [];
+
+    # record the absolute maximum of the weights and biases for plotting later
     DNN_max_weights_trials = np.zeros(args.nb_trials)
+
+    # initial error in determining when to checkpoint
     last_ckpt_loss = 1e16;
 
+    # loading the data from MATLAB
     if args.MATLAB_data:
+
+        # the training data is in MATLAB files with names in the form: 
+        # (example)_func_(input_dim)_dim_(number of training points)_(type of pointset)_pts.mat
         training_data_filename = 'training_data/' + args.example + '_func_' \
                     + str(args.input_dim).zfill(4) + '_dim_' \
                     + str(args.nb_train_points).zfill(10) + '_' \
                     + args.train_pointset + '_pts.mat'
+
         print('Loading training data from: ' + training_data_filename)
+
+        # load the MATLAB -v7.3 hdf5-based format mat file
         training_data = hdf5storage.loadmat(training_data_filename)
-        #training_data = sio.loadmat(training_data_filename)
+
+        # depending on the training model (either using deterministic or random points) 
+        # set up the seeds based on the trial number or just use 0 seed in the case of 
+        # random points
         if args.train_pointset == 'linspace':
             print('Using uniformly spaced points from MATLAB')
+
             # every trial uses same points (trials based on seed of np & tf)
             x_in_train = training_data['X']
             y_true_train = training_data['Y']
+
+            # for deterministic data, there is only one data set 
+            # (don't need to split based on trial number as below)
             x_in_train_trials = x_in_train
-            # initialize np and tf random seeds to 0
+
+            # Since there are no different trial datasets, use the trial numbers to
+            # initialize np and tf random seeds 
             print('Using trial_num = ' + str(trial) + ' as seed for tensorflow')
             print('Using trial_num = ' + str(trial) + ' as seed for numpy')
             np.random.seed(trial)
             tf.set_random_seed(trial)
+
         if args.train_pointset == 'CC_sparse_grid':
             print('Using uniformly spaced points from MATLAB')
+
             # every trial uses same points (trials based on seed of np & tf)
             x_in_train = training_data['X']
             y_true_train = training_data['Y']
+
+            # for deterministic data, there is only one data set 
+            # (don't need to split based on trial number as below)
             x_in_train_trials = x_in_train
+
+            # record the quadrature weights if using SG-quadrature-regularized training
             quadrature_weights_train = training_data['W']
+
             # initialize np and tf random seeds to 0
             print('Using trial_num = ' + str(trial) + ' as seed for tensorflow')
             print('Using trial_num = ' + str(trial) + ' as seed for numpy')
             np.random.seed(trial)
             tf.set_random_seed(trial)
+
         elif args.train_pointset == 'uniform_random':
             # every trial uses same np & tf seed (trials based on sets of random points)
             print('Using uniform random points (trial ' + str(trial) + ') from MATLAB')
+
+            # take the point data for this trial
             x_in_train_trials = training_data['X']
             x_in_train = np.transpose(x_in_train_trials[:,:,trial])
+
+            # take the function data for this trial
             y_true_train_trials = training_data['Y']
             y_true_train = np.transpose(y_true_train_trials[:,:,trial])
+
+            # these are both initialized above (TODO: change this to specify the seeds at command line)
             print('Using ' + str(tf_seed) + ' as seed for tensorflow')
             print('Using ' + str(np_seed) + ' as seed for numpy')
             np.random.seed(np_seed)
             tf.set_random_seed(tf_seed)
 
+        # testing data filename has same structure as training data filename:
+        # (example)_func_(input_dim)_dim_(number of training points)_(type of pointset)_pts.mat
         testing_data_filename = 'testing_data/' + args.example + '_func_' \
                     + str(args.input_dim).zfill(4) + '_dim_' \
                     + str(args.nb_test_points).zfill(10) + '_' \
                     + args.test_pointset + '_pts.mat'
+
         print('Loading testing data from: ' + testing_data_filename)
         testing_data = hdf5storage.loadmat(testing_data_filename)
-        #testing_data = sio.loadmat(testing_data_filename)
+
         print('Using ' + args.test_pointset + ' testing points from MATLAB')
+
+        # set the testing data (often smaller than the final testing data, for 
+        # outputting the errors while training)
         x_in_test = np.transpose(testing_data['X'])
         y_true_test = np.transpose(testing_data['Y'])
+
+        # quadrature weights used in reporting the error while training
         quadrature_weights_test = np.transpose(testing_data['W'])
+
     else:
+        # if we're not using MATLAB for inputting the training/testing data, then
+        # generate the equispaced points directly in python and evaluate the target
+        # function at these points (TODO: remove this as no longer needed)
         print('Using linearly spaced points')
         if args.input_dim == 1:
             x_in_train_trials = np.zeros((args.nb_train_points, args.input_dim, args.nb_trials))
@@ -713,18 +749,18 @@ if __name__ == '__main__':
             x_in_test = np.linspace(-1.0, 1.0, num = args.nb_test_points).reshape(args.nb_test_points,1)
             for t in range(args.nb_trials):
                 x_in_train_trials[:,:,t] = x_in_train.reshape(args.nb_train_points,args.input_dim)
+
         else:
+            # code doesn't handle higher dimensional generation of data since mostly
+            # rely on MATLAB
             sys.exit('Must use MATLAB data for args.input_dim > 1')
             
-        # initialize np and tf random seeds to trial
+        # initialize np and tf random seeds to trial since data is deterministic
         print('Using ' + str(trial) + ' as seed for tensorflow')
         print('Using ' + str(trial) + ' as seed for numpy')
         np.random.seed(trial)
         tf.set_random_seed(trial)
-        #print(x_in_train.shape)
 
-    #print(x_in_train)
-    #print(x_in_train.shape)
 
     # TRAIN: if doing training
     if args.train:
@@ -733,48 +769,73 @@ if __name__ == '__main__':
             print('Saving to (result_folder): ' + str(result_folder))
             print('Starting trial: ' + str(trial))
 
+        # set up the learning rate schedule from either exp_decay, linear, or constant 
         if args.lrn_rate_schedule == 'exp_decay':
+            # need to specify the initial learning rate
             init_rate = 1e-3
             lrn_rate = init_rate
+
+            # update frequency specifies how many epochs until the learning rate is 
+            # decayed by a specific amount 
             update_freq = 1e3 #*args.batch_size/args.nb_train_points
+
+            # calculate the base so that the learning rate schedule with 
+            # exponential decay follows (init_rate)*(base)^(current_epoch/update_freq)
             base = np.exp(update_freq/args.nb_epochs*(np.log(error_tol)-np.log(init_rate)))
-            print('based on init_rate = ' + str(init_rate) \
-                + ', update_freq = ' + str(update_freq) \
-                + ', calculated base = ' + str(base) 
-                + ', so that after ' + str(args.nb_epochs) \
-                + ' epochs, we have final learning rate = ' \
-                + str(init_rate*base**(args.nb_epochs/update_freq)))
+
+            # based on the above, the final learning rate is (init_rate)*(base)^(total_epochs/update_freq)
+            print('based on init_rate = ' + str(init_rate)
+                  + ', update_freq = ' + str(update_freq)
+                  + ', calculated base = ' + str(base) 
+                  + ', so that after ' + str(args.nb_epochs)
+                  + ' epochs, we have final learning rate = '
+                  + str(init_rate*base**(args.nb_epochs/update_freq)))
+
         elif args.lrn_rate_schedule == 'linear':
+            # only need to specify the init rate for linear
             init_rate = 1e-3
             print('using a linear learning rate schedule')
+
         elif args.lrn_rate_schedule == 'constant':
+            # only need to specify the init rate for constant (stays the same)
             init_rate = 1e-3
             print('using a constant learning rate')
 
-        #if args.make_plots:
-            #plt.clf()
-            #plt.figure(1)
-            #plt.title('points and function values')
-            #plt.scatter(x_in_train, x_in_train)
+        # plotting 
+        # TODO: broken currently, need to fix
+        if args.make_plots:
+            plt.clf()
+            plt.figure(1)
+            plt.title('points and function values')
+            plt.scatter(x_in_train, y_true_train)
+            plt.draw()
+            plt.show()
+            plt.show(block=False) # show the plot
+            print('attempted to plot training data')
         
+        # build the graph for the DNN
         with tf.variable_scope('Graph') as scope:
         
             # inputs to the NN
             x = tf.placeholder(precision, shape = [args.input_dim, None], name = 'input')
 
             if not args.MATLAB_data and args.input_dim == 1:
-                # ground truth and our UA
+                # directly define the function to approximate 
                 y_true = func_to_approx(x, args.input_dim, args.output_dim, args.example)
+
             else:
+                # define a placeholder to feed data into while training instead
                 y_true = tf.placeholder(precision, shape = [args.output_dim, None], name = 'y_true')
 
-            # universal approximator
-            y = funcApprox(x, args.nb_layers, args.input_dim, args.output_dim, args.nb_nodes_per_layer, args.blocktype, args.activation, precision, args.initializer)
+            # construct the network using this function
+            y = funcApprox(x, args.nb_layers, args.input_dim, args.output_dim, args.nb_nodes_per_layer, 
+                           args.blocktype, args.activation, precision, args.initializer)
 
             print(y)
 
             # loss function
             with tf.variable_scope('Loss'):
+
                 # ERM functional
                 if args.use_regularizer:
                     if args.precision == 'double':
@@ -782,60 +843,32 @@ if __name__ == '__main__':
                     elif args.precision == 'single':
                         l2_reg_lambda = np.float32(args.reg_lambda)
 
-                    #print(type(l2_reg_lambda))
-                    #print(type(y))
-                    #print(type(y_true))
                     print('Using tf.losses.mean_squared_error + l2 regularization with lambda = ' + str(l2_reg_lambda))
                     vars = tf.trainable_variables()
-                    #for v in vars:
-                        #print(type(v))
-                    #print(tf.losses.mean_squared_error(y, y_true))
-                    #print(tf.reduce_mean(tf.abs(tf.square(y-y_true))))
-                    #print(y)
-                    #print(y_true)
-                    #for v in vars:
-                        #print(tf.nn.l2_loss(v))
 
-                    #L2 Loss
-                    loss = tf.reduce_mean(tf.abs(tf.square(y-y_true))) + tf.add_n([ tf.nn.l2_loss(v) for v in vars ])*l2_reg_lambda
-                    #L1 Loss
-                    #loss = tf.reduce_mean(tf.abs(tf.square(y-y_true))) + tf.add_n([ tf.reduce_sum(tf.math.abs(v)) for v in vars ])*l2_reg_lambda
-                    # causes a loss of precision some how?
-                    #loss = tf.losses.mean_squared_error(y, y_true) + tf.add_n([ tf.nn.l2_loss(v) for v in vars ])*l2_reg_lambda
-                    #print(loss)
+                    #L2 Loss plus regularization term on the trainable weights & biases
+                    loss = tf.reduce_mean(tf.abs(tf.square(y-y_true))) + \
+                           tf.add_n([ tf.nn.l2_loss(v) for v in vars ])*l2_reg_lambda
+
+                    #L1 Loss plus regularization term on the trainable weights & biases
+                    #loss = tf.reduce_mean(tf.abs(tf.square(y-y_true))) + \
+                            #tf.add_n([ tf.reduce_sum(tf.math.abs(v)) for v in vars ])*l2_reg_lambda
+
+                    #print(loss) 
+
                 else:
+
+                    # the default mean squared error
                     print('Using tf.losses.mean_squared_error')
                     loss = tf.losses.mean_squared_error(y, y_true)
-                    #loss = tf.losses.mean_squared_error(y, y_true) # causes a loss of precision some how?
 
-                #print('y shape = ')
-                #print(y.shape)
-                #print('y_true shape = ')
-                #print(y_true.shape)
-                #loss = tf.reduce_mean(tf.abs(tf.square(y - y_true)*quadrature_weights_train))
-                #loss = tf.reduce_max(y - y_true)
                 loss_summary_t = tf.summary.scalar('loss', loss) 
-
-            # use a strategy of exponential learning rate decay
-            #step = tf.Variable(0, trainable=False)
-            #learning_rate = tf.train.exponential_decay(init_rate, 
-            #        step, update_freq, base, staircase=False)
-            # WARNING: if you use this method, you must add the input global_step = step 
-            # to train_op = opt.minimize(loss) below and remove the learning rate from the
-            # feed_dict in the training step 
 
             # use a manual learning rate update strategy
             # using a placeholder, we can pass the learning rate in at each iteration 
             learning_rate = tf.placeholder(precision, [], name='learning_rate')
 
-            # which optimizer to use
-            #opt = tf.train.GradientDescentOptimizer(learning_rate = init_rate)
-            #opt = tf.train.AdadeltaOptimizer(learning_rate = init_rate)
-
-            # use the learning rate placeholder for manual control
-            #opt = tf.train.AdamOptimizer(learning_rate = learning_rate_placeholder)
-
-            # use the exponentially decaying learning rate
+            # set the optimizer to use 
             if args.optimizer == 'SGD':
                 opt = tf.train.GradientDescentOptimizer(learning_rate = learning_rate)
                 if not args.quiet:
@@ -881,11 +914,15 @@ if __name__ == '__main__':
                 if not args.quiet:
                     print('using ProximalGradientDescent optimizer with exponentially decaying learning rate')
             elif args.optimizer == 'PGD_custom':
-                opt = tf.train.ProximalGradientDescentOptimizer(learning_rate = learning_rate, l1_regularization_strength=1e-3, l2_regularization_strength=0.0)
+                opt = tf.train.ProximalGradientDescentOptimizer(learning_rate = learning_rate, 
+                                                                l1_regularization_strength=1e-3, 
+                                                                l2_regularization_strength=0.0)
                 if not args.quiet:
                     print('using ProximalGradientDescent optimizer with exponentially decaying learning rate')
             elif args.optimizer == 'PGD_custom2':
-                opt = tf.train.ProximalGradientDescentOptimizer(learning_rate = learning_rate, l1_regularization_strength=0.0, l2_regularization_strength=1e-3)
+                opt = tf.train.ProximalGradientDescentOptimizer(learning_rate = learning_rate, 
+                                                                l1_regularization_strength=0.0, 
+                                                                l2_regularization_strength=1e-3)
                 if not args.quiet:
                     print('using ProximalGradientDescent optimizer with exponentially decaying learning rate')
             elif args.optimizer == 'ProximalAdagrad':
@@ -899,7 +936,7 @@ if __name__ == '__main__':
             else:
                 sys.exit('args.optimizer must be one of the preset optimizers: SGD, Adam, etc.')
 
-            train_op = opt.minimize(loss)#, global_step = step)
+            train_op = opt.minimize(loss)
             
         with tf.variable_scope('TensorboardMatplotlibInput') as scope:
             # matplotlib will give us the image as a string
@@ -917,11 +954,15 @@ if __name__ == '__main__':
         # array of iteration updates
         num = np.array([])
         num_perc = np.array([])
-        # array of losses at iteration updates
+
+        # arrays of losses and learning rates used at iteration updates
         losses = np.array([])
         lrn_rates = np.array([])
 
+        # keep track of the minimum loss achieved while training
         min_loss = 10;
+
+        # keep track of the loss at the last learning rate update
         last_lrn_update_loss = 10;
 
         # print out the number of parameters to be trained
@@ -933,6 +974,7 @@ if __name__ == '__main__':
         #for v in tf.trainable_variables():
             #print(v)
 
+        # create the session to start initializing and training the DNN
         with tf.Session() as sess:
 
             # create a SummaryWriter to save data for TensorBoard
@@ -944,9 +986,10 @@ if __name__ == '__main__':
             if not args.quiet:
                 print('Training the NN')
 
-            # init variables
+            # initialize the variables with the type and precision above
             sess.run(tf.global_variables_initializer())
 
+            # loss at last update
             last_loss = 1.0;
 
             for i in range(args.nb_epochs):#//args.batch_size):
@@ -962,16 +1005,14 @@ if __name__ == '__main__':
                     lrn_rate = init_rate
 
                 count = 0
-                # run one iteration of the model with learning rate lrn_rate and input x_in_train
-                # this method allows for the exponentially decaying learning rate
-                #print('x_in_train shape = ')
-                #print(x_in_train.shape)
+
+                # if doing batching, split the training data into batches and execute
+                # one epoch of training with the given optimizer on the batches
                 for x_in_train_batch, y_true_train_batch in get_batch(x_in_train, y_true_train, args.batch_size):
+
                     count = count + 1
-                    #print('x_in_train_batch shape = ')
-                    #print(x_in_train_batch.shape)
-                    #print('y_true_train_batch shape = ')
-                    #print(y_true_train_batch.shape)
+
+                    # run the optimization process and save loss information
                     current_loss, loss_summary, current_learning_rate, _ = \
                             sess.run([loss, loss_summary_t, learning_rate, train_op],
                                      feed_dict = {x: x_in_train_batch, \
@@ -980,59 +1021,10 @@ if __name__ == '__main__':
 
                 #print('batches over after ' + str(count) + ' batches')
 
-                # old way of running, manual control over lrn_rate through placeholder
-                #current_loss, loss_summary, _ = sess.run([loss, loss_summary_t, train_op], 
-                #        feed_dict = {x: x_in_train, learning_rate_placeholder: lrn_rate})
-
-
                 # add the current loss summary to the SummaryWriter for TensorBoard
                 sw.add_summary(loss_summary, i + 1)
 
-                """
-                if (current_loss < last_loss and current_loss < 1e-1):
-                    lrn_rate = current_loss/20.0;
-
-                last_loss = current_loss;
-                """
-
-                """
-                if (current_loss <= 1e-3 and current_loss > 1e-4 and lrn_rate > 1e-5):
-                    lrn_rate = 1e-5;
-                    print('dropping learning rate to %3.2e' % lrn_rate);
-                elif (current_loss <= 1e-4 and current_loss > 1e-5 and lrn_rate > 1e-6):
-                    lrn_rate = 1e-6;
-                    print('dropping learning rate to %3.2e' % lrn_rate);
-                elif (current_loss <= 1e-5 and current_loss > 1e-6 and lrn_rate > 1e-7):
-                    lrn_rate = 1e-7;
-                    print('dropping learning rate to %3.2e' % lrn_rate);
-                elif (current_loss <= 1e-6 and current_loss > 1e-7 and lrn_rate > 1e-8):
-                    lrn_rate = 1e-8;
-                    print('dropping learning rate to %3.2e' % lrn_rate);
-                elif (current_loss <= 1e-7 and current_loss > 1e-8 and lrn_rate > 1e-9):
-                    lrn_rate = 1e-9;
-                    print('dropping learning rate to %3.2e' % lrn_rate);
-                elif (current_loss <= 1e-8 and current_loss > 1e-9 and lrn_rate > 1e-10):
-                    lrn_rate = 1e-10;
-                    print('dropping learning rate to %3.2e' % lrn_rate);
-                elif (current_loss <= 1e-9 and current_loss > 1e-10 and lrn_rate > 1e-11):
-                    lrn_rate = 1e-11;
-                    print('dropping learning rate to %3.2e' % lrn_rate);
-                elif (current_loss <= 1e-10 and current_loss > 1e-11 and lrn_rate > 1e-12):
-                    lrn_rate = 1e-12;
-                    print('dropping learning rate to %3.2e' % lrn_rate);
-
-                current_learning_rate = lrn_rate
-                """
-
-                """
-                if(current_loss/last_lrn_update_loss < 0.5):
-                    lrn_rate = lrn_rate*0.70;
-                    last_lrn_update_loss = current_loss;
-
-                current_learning_rate = lrn_rate
-                """
-
-                # when the error has decreased by 10%, decrease learning rate and test model fidelity
+                # when the error has decreased enough test model and save
                 if (current_loss/min_loss < update_ratio):
 
                     # remove the last checkpoint if it exists
@@ -1041,27 +1033,26 @@ if __name__ == '__main__':
 
                     inputs_dict = {"input": x}
                     outputs_dict = {"output": y}
+                    
+                    # TODO: this method has been deprecated and should be updated
                     tf.saved_model.simple_save(sess, scratch_folder + '/chkpt', inputs_dict, outputs_dict)
+
+                    # update the last checkpoint loss to determine whether to 
+                    # keep this save or keep the end result
                     last_ckpt_loss = current_loss
 
+                    # if the ratio current_loss/min_loss < update_ratio, then it's 
+                    # also less than 1, implying current_loss <= min_loss (so update)
                     min_loss = current_loss;
 
+                    # evaluate the model at the testing points
                     y_true_res, y_res = sess.run([y_true, y], feed_dict = {x: x_in_test, y_true: y_true_test})
 
-                    #print('y_true_res shape = ')
-                    #print(y_true_res.shape)
-                    #print('y_true_test shape = ')
-                    #print(y_true_test.shape)
-                    #print('y_res shape = ')
-                    #print(y_res.shape)
-                    #print('quadrature_weights_test shape = ')
-                    #print(quadrature_weights_test.shape)
-
+                    # compute the absolute difference between the trained model 
+                    # and the true data
                     absdiff = abs(y_true_test - y_res);
 
-                    #print('absdiff shape = ')
-                    #print(absdiff.shape)
-
+                    # compute percentages of points with errors above thresholds
                     perc_e1 = (1.0*(absdiff > 10)).sum()/args.nb_test_points*100.0;
                     perc_e0 = (1.0*(absdiff > 1)).sum()/args.nb_test_points*100.0;
                     perc_em1 = (1.0*(absdiff > 1e-1)).sum()/args.nb_test_points*100.0;
@@ -1071,12 +1062,14 @@ if __name__ == '__main__':
                     perc_em5 = (1.0*(absdiff > 1e-5)).sum()/args.nb_test_points*100.0;
                     perc_em6 = (1.0*(absdiff > 1e-6)).sum()/args.nb_test_points*100.0;
 
+                    # the l-infinity error over the test points
                     linferr = np.amax(absdiff);
 
-                    #print('linferr = ' + str(linferr))
-
+                    # the l2err over the test points
                     l2err = np.sqrt(sum(np.square(absdiff)))
 
+                    # the L2 error with respect to the uniform measure computed with 
+                    # the sparse grid quadrature rule above
                     L2err = np.sqrt(abs(np.sum(np.square(absdiff)*quadrature_weights_test*2.0**(-1.0*args.input_dim))))
 
                     if not args.quiet:
@@ -1087,26 +1080,25 @@ if __name__ == '__main__':
                                 perc_em4, perc_em5, perc_em6, current_learning_rate));
                         
 
-                if True:
-                #if (i == 0) or (i % 100 == 0):
-
-                    num = np.append(num, i)
-                    losses = np.append(losses, [current_loss])
-                    lrn_rates = np.append(lrn_rates, [current_learning_rate])
+                # keep track of iterations, losses, and used learning rates
+                num = np.append(num, i)
+                losses = np.append(losses, [current_loss])
+                lrn_rates = np.append(lrn_rates, [current_learning_rate])
 
 
-                #if True:
-                #if (i == 0) or (i % 1000 == 0) or (current_loss <= error_tol):
+                # if the model has converge or run out of epochs of training, or if 1000 epochs have passed
                 if (i == 0) or (i % 1000 == 0) or (current_loss <= error_tol) or (i == args.nb_epochs - 1):
 
                     # run the model on the test inputs
                     y_true_res, y_res = sess.run([y_true, y], feed_dict = {x: x_in_test, y_true: y_true_test})
+
                     # update the losses
                     curnt_loss = np.array2string(current_loss, precision = 12)
 
                     # compute error statistics
                     absdiff = abs(y_true_test - y_res)
 
+                    # compute the percentages above
                     perc_e1 = (1.0*(absdiff > 10)).sum()/args.nb_test_points*100.0;
                     perc_e0 = (1.0*(absdiff > 1)).sum()/args.nb_test_points*100.0;
                     perc_em1 = (1.0*(absdiff > 1e-1)).sum()/args.nb_test_points*100.0;
@@ -1116,10 +1108,14 @@ if __name__ == '__main__':
                     perc_em5 = (1.0*(absdiff > 1e-5)).sum()/args.nb_test_points*100.0;
                     perc_em6 = (1.0*(absdiff > 1e-6)).sum()/args.nb_test_points*100.0;
 
+                    # the l-infinity error over the training points
                     linferr = np.amax(absdiff);
 
+                    # the l2 error over the training points
                     l2err = np.sqrt(sum(np.square(absdiff)))
 
+                    # the L2 error with respect to the uniform measure computed with 
+                    # the sparse grid quadrature rule above
                     L2err = np.sqrt(abs(np.sum(np.square(absdiff)*quadrature_weights_test*2.0**(-1.0*args.input_dim))))
 
                     # assign to running stats
@@ -1131,11 +1127,6 @@ if __name__ == '__main__':
                                 perc_em5, perc_em6];
                     else:
                         num_perc = np.append(num_perc, i)
-                        #print(percs)
-                        #print([perc_e1, perc_e0, 
-                        #       perc_em1, perc_em2, 
-                        #       perc_em3, perc_em4, 
-                        #       perc_em5, perc_em6])
                         percs = np.vstack([percs, [perc_e1, perc_e0, 
                                                 perc_em1, perc_em2, 
                                                 perc_em3, perc_em4, 
@@ -1149,6 +1140,7 @@ if __name__ == '__main__':
                     run_data['lrn_rates'] = lrn_rates
                     run_data['lrn_rate_schedule'] = args.lrn_rate_schedule
 
+                    # these are only set for exp_decay
                     if args.lrn_rate_schedule == 'exp_decay':
                         run_data['base'] = base
                         run_data['update_freq'] = update_freq
@@ -1184,7 +1176,8 @@ if __name__ == '__main__':
                     run_data['tf_trainable_vars'] = tf_trainable_vars
                     run_data['sigma'] = sigma
 
-                    sio.savemat(result_folder + '/run_data', run_data)
+                    # save the resulting mat file with scipy.io
+                    sio.savemat(result_folder + '/run_data.mat', run_data)
 
                     # plot error of approximation
                     if (args.input_dim == 1 and args.make_plots):
@@ -1220,8 +1213,6 @@ if __name__ == '__main__':
                         # plot absolute error percentiles
                         plt.subplot(236)
                         if (i > 0):
-                            #print(percs)
-                            #print(percs[:,0])
                             plt.title('absolute error percentiles')
                             plt.semilogy(num_perc, percs[:,0],label = '% > 1e1')
                             plt.semilogy(num_perc, percs[:,1],label = '% > 1e0')
@@ -1235,36 +1226,45 @@ if __name__ == '__main__':
 
                         plt.tight_layout()
                         plt.draw() # update after all subplots are done
-                        #plt.show()
-                        #plt.show(block=False) # show the plot
+                        plt.show()
+                        plt.show(block=False) # show the plot
 
                     if not args.quiet:
                         print('batch: ' + str(i).zfill(8) + ', loss: %8.4e, lrn_rate: %4.4e, seconds: %8.2f ' \
                             % (current_loss, current_learning_rate, time.time() - start_time))
 
+                    # if we haven't converged, save the figure if plotting
                     if (current_loss > error_tol):
                         if args.make_plots:
-                            plt.savefig('frames/trial_' + str(trial) + '_' + str(args.nb_layers) + '_layer_epochs_' + \
-                                str(args.nb_epochs) + '_points_' + str(args.nb_train_points).zfill(6) + '_iter_' + str(i).zfill(8) + '.png')
+                            plt.savefig('frames/trial_' + str(trial) + '_' + str(args.nb_layers) + \
+                                        '_layer_epochs_' + str(args.nb_epochs) + '_points_' + \
+                                        str(args.nb_train_points).zfill(6) + '_iter_' + str(i).zfill(8) + '.png')
 
+                    # if we've converged to the error tolerance in the loss, or run 
+                    # into the maximum number of epochs, stop training and save
                     if (current_loss <= error_tol) or (i == args.nb_epochs - 1):
+                        # for saving images of outputs of the trained DNNs 
                         if not os.path.exists(scratchdir + '/results/' + unique_run_ID + '/' + key + '/trained_imgs/'):
                             os.makedirs(scratchdir + '/results/' + unique_run_ID + '/' + key + '/trained_imgs/')
 
+                        # save the plot as a png
                         if args.make_plots:
                             plt.savefig(scratchdir + '/results/' + unique_run_ID + '/' + key + '/trained_imgs/'  \
                                     + key + '_trial_' + str(trial) + '.png')
 
+                        # output the final checkpoint loss and statistics 
                         if not args.quiet:
                             print("final chkpt: %s, loss: %8.4e, error: linf = %6.4f, L2 = %6.4f, %%>1ek: " \
                                 "0 = %6.4f, -1 = %6.4f, -2 = %6.4f, -3 = %6.4f, -4 = %6.4f, -5 = %6.4f, -6 = %6.4f" \
                                 "  lrn_rate = %6.4e"
                                 % (str(i).zfill(8), current_loss, linferr, L2err, perc_e0, perc_em1, perc_em2, perc_em3, 
                                     perc_em4, perc_em5, perc_em6, current_learning_rate));
-                        #saver.save(sess, result_folder + '/final_' + str(i).zfill(8))
+
+                        # TODO: this save method has been deprecated and needs to be updated
                         inputs_dict = {"input": x}
                         outputs_dict = {"output": y}
                         tf.saved_model.simple_save(sess, result_folder + '/final', inputs_dict, outputs_dict)
+
                         # save relevant run data for loading into MATLAB
                         run_data = {}
                         run_data['optimizer'] = args.optimizer
@@ -1273,6 +1273,7 @@ if __name__ == '__main__':
                         run_data['lrn_rates'] = lrn_rates
                         run_data['lrn_rate_schedule'] = args.lrn_rate_schedule
 
+                        # only exp_decay has base and update_freq parameters
                         if args.lrn_rate_schedule == 'exp_decay':
                             run_data['base'] = base
                             run_data['update_freq'] = update_freq
@@ -1308,24 +1309,37 @@ if __name__ == '__main__':
                         run_data['precision'] = args.precision
                         run_data['sigma'] = sigma
 
-                        sio.savemat(result_folder + '/run_data', run_data)
+                        # save the data with scipy.io as MATLAB -v7.3 hdf5-based format
+                        sio.savemat(result_folder + '/run_data.mat', run_data)
+
                         if not args.quiet:
                             print('last chkpt loss: %8.4e  current loss: %8.4e' % (last_ckpt_loss, current_loss))
 
+                        # if the last checkpoint actually had better error, delete the final 
+                        # and replace it with the better checkpoint
+                        # NOTE: since the run_data is saved above, this corresponds to the 
+                        # data for the final DNN (before replacing with any checkpoints)
+                        # Testing should be performed only on the final result (whether an
+                        # earlier checkpoint or the DNN at this stage)
                         if last_ckpt_loss < current_loss:
+                            # remove the final if it exists
                             if (os.path.exists(result_folder + '/final')):
                                 shutil.rmtree(result_folder + '/final')
                             else:
                                 print('folder ' + result_folder + '/final' + ' does not exist, skipping')
 
+                            # replace the final with the checkpoint 
                             if (os.path.exists(scratch_folder + '/chkpt')):
                                 shutil.move(scratch_folder + '/chkpt', result_folder + '/final')
                             else:
                                 print('folder ' + scratch_folder + '/chkpt' + ' does not exist, skipping')
 
                             if not args.quiet:
-                                print('replaced final with best checkpoint')
+                                print('tried replacing final with best checkpoint')
+
                         else:
+                            # in this case the final is the best out of the 
+                            # checkpoints, so remove the last checkpoint
                             if not args.quiet:
                                 print('keeping final as best checkpoint')
                                 print('removing last checkpoint')
@@ -1333,6 +1347,7 @@ if __name__ == '__main__':
                                     shutil.rmtree(scratch_folder + '/chkpt')
                                 else:
                                     print('folder ' + scratch_folder + '/chkpt' + ' does not exist, skipping')
+
                         break
 
                     if args.make_plots:
@@ -1341,39 +1356,31 @@ if __name__ == '__main__':
     # NOTTRAIN: if not doing training
     else:
 
+        # number of variables that can be trained in the saved DNN
         tf_trainable_vars = 0
 
+        # open the results for each trial
         for trial in range(args.nb_trials):
 
+            # the result and scratch folders (here the same since we save to 
+            # scratch only, change if needed)
             result_folder = scratchdir + '/results/' + unique_run_ID + '/' + key + '/trial_' + str(trial)
             scratch_folder = scratchdir + '/results/' + unique_run_ID + '/' + key + '/trial_' + str(trial)
 
+            # reset the graph to initial state
             tf.reset_default_graph()
 
+            # open the session for testing
             with tf.Session() as sess:
 
                 if not args.quiet:
                     print("Loading run \"%s\" trial: %d from %s" % (unique_run_ID, trial, result_folder))
 
-                """
-                arch_desc = 'ReLU_' + str(args.nb_layers) \
-                            + 'x' + str(args.nb_nodes_per_layer) + '_arch_' \
-                            + str(args.nb_train_points) + '_pnts'
+                # TODO: fix this method as has been deprecated
+                tf.compat.v1.saved_model.load(sess, [tag_constants.SERVING], result_folder + '/final') 
 
-                checkpt_dir = scratchdir
-                latest_chkpt = tf.train.latest_checkpoint(scratchdir + '/results/' \
-                        + unique_run_ID + '/' + arch_desc + '/trial_' + str(trial))
-                meta_file = latest_chkpt + '.meta'
-                print("latest checkpoint found at %s" % latest_chkpt)
-                print("Loading meta file: %s" % meta_file)
-                restorer = tf.train.import_meta_graph(meta_file)
-                restorer.restore(sess, latest_chkpt)
-                """
-                    
-                #tf.saved_model.loader.load(sess, [tag_constants.SERVING], result_folder + '/final') # DEPRECATED
-                tf.compat.v1.saved_model.load(sess, [tag_constants.SERVING], result_folder + '/final') # compatibility fix
+                # load the graph from this saved file
                 graph = tf.get_default_graph()
-                #print(graph.get_operations())
 
                 # print out the number of parameters to be trained
                 tf_trainable_vars = np.sum([np.prod(v.get_shape().as_list()) for v in tf.trainable_variables()])
@@ -1381,87 +1388,44 @@ if __name__ == '__main__':
                 if not args.quiet:
                     print('This model has ' + str(tf_trainable_vars) + ' trainable parameters')
 
+                # for recording the max weight
                 max_weight = 0.0
 
                 # find the max weight over this trial
-                #print('Printing them now:')
                 for v in tf.trainable_variables():
-                    #print(v)
+
                     max_v = tf.reduce_max(tf.abs(v))
                     max_v_val = sess.run(max_v)
-                    #print(max_v_val)
+
+                    # update if larger 
                     if max_v_val > max_weight:
                         max_weight = max_v_val
 
+                # record the maximum for this trial
                 DNN_max_weights_trials[trial] = max_weight
                 print('max weight of this trial = ' + str(max_weight))
 
-                #for n in tf.get_default_graph().as_graph_def().node:
-                    #print(n.name)
-
-                #gd = sess.graph_def
-                #x, y = tf.import_graph_def(gd, return_elements =['input', 'output'])
-
-                #for op in graph.get_operations():
-                    #print(op.name)
-
+                # get the input and output tensors of the trained DNN model by their names
                 x = graph.get_tensor_by_name('Graph/input:0')
                 y = graph.get_tensor_by_name('Graph/UniversalApproximator/output:0')
 
-                # ground truth and our UA
+                # define y_true for testing
                 if not args.MATLAB_data and args.input_dim == 1:
                     y_true = func_to_approx(x, args.example)
                 else:
                     y_true = tf.placeholder(precision, shape = [args.output_dim, None], name = 'y_true')
 
-                """
-                if args.MATLAB_data:
-                    training_data_filename = 'training_data/' + args.example + '_func_' \
-                                + str(args.input_dim) + '_dim_' + str(args.nb_train_points) \
-                                + '_' + args.train_pointset + '_pts.mat'
-                    print('Loading training data from: ' + training_data_filename)
-                    training_data = sio.loadmat(training_data_filename)
-                    if args.train_pointset == 'linspace':
-                        x_in_train = training_data['X']
-                        y_true_train = training_data['Y']
-                    elif args.train_pointset == 'uniform_random':
-                        x_in_train_trials = training_data['X']
-                        x_in_train = x_in_train_trials[:,:,trial]
-                        y_true_train_trials = training_data['Y']
-                        y_true_train = y_true_train_trials[:,:,trial]
 
-                    testing_data_filename = 'testing_data/' + args.example + '_func_' \
-                                + str(args.input_dim) + '_dim_' + str(args.nb_test_points) \
-                                + '_' + args.test_pointset + '_pts.mat'
-                    print('Loading testing data from: ' + testing_data_filename)
-                    testing_data = sio.loadmat(testing_data_filename)
-                    print('Using ' + args.test_pointset + ' testing points from MATLAB')
-                    x_in_test = testing_data['X']
-                    y_true_test = testing_data['Y']
-                    quadrature_weights_test = testing_data['W']
-                else:
-                    if args.input_dim == 1:
-                        # generate testing points
-                        x_in_test = np.linspace(-1.0, 1.0, num = args.nb_test_points)
-                        #print('size of testing set: ' + str(x_in_test.shape));
-                        x_in_test = np.array(x_in_test).reshape(args.nb_test_points, 1)
-                        #print('size of testing set: ' + str(x_in_test.shape));
-                    else:
-                        sys.exit('Must use MATLAB data for args.input_dim > 1')
-                """
-
+                # evaluate the model's predictions on the testing set
                 y_true_test_pred, y_DNN_test_pred = sess.run([y_true, y], feed_dict = {x: x_in_test, y_true: y_true_test})
 
+                # evaluate the model's predictions on the training set 
                 y_true_train_pred, y_DNN_train_pred = sess.run([y_true, y], feed_dict = {x: x_in_train, y_true: y_true_train})
-
-                #print('y_DNN_test_pred.shape = ')
-                #print(y_DNN_test_pred.shape)
-                #print('y_true_test shape = ')
-                #print(y_true_test.shape)
 
                 # compute statistics
                 absdiff = abs(y_true_test - y_DNN_test_pred);
 
+                # compute percentages as above
                 perc_e1 = (1.0*(absdiff > 10)).sum()/args.nb_test_points*100.0;
                 perc_e0 = (1.0*(absdiff > 1)).sum()/args.nb_test_points*100.0;
                 perc_em1 = (1.0*(absdiff > 1e-1)).sum()/args.nb_test_points*100.0;
@@ -1471,10 +1435,13 @@ if __name__ == '__main__':
                 perc_em5 = (1.0*(absdiff > 1e-5)).sum()/args.nb_test_points*100.0;
                 perc_em6 = (1.0*(absdiff > 1e-6)).sum()/args.nb_test_points*100.0;
 
+                # the l-infinity error on the testing points
                 linferr = np.amax(absdiff);
 
+                # the l-2 error on the testing points
                 l2err = np.sqrt(sum(np.square(absdiff)))
 
+                # the L2 error on the testing points computed with a SG quadrature rule
                 L2err = np.sqrt(abs(np.sum(np.square(absdiff)*quadrature_weights_test*2.0**(-1.0*args.input_dim))))
 
                 if not args.quiet:
@@ -1490,25 +1457,18 @@ if __name__ == '__main__':
                             perc_em3, perc_em4, 
                             perc_em5, perc_em6]
                     y_true_test_pred = y_true_test_pred
-                    y_true_train_pred_trials = y_true_train #y_true_train_pred.transpose()
-                    y_DNN_test_pred_trials = y_DNN_test_pred #.transpose()
-                    y_DNN_train_pred_trials = y_DNN_train_pred #.transpose()
+                    y_true_train_pred_trials = y_true_train 
+                    y_DNN_test_pred_trials = y_DNN_test_pred 
+                    y_DNN_train_pred_trials = y_DNN_train_pred 
                 else:
-                    #print(percs)
-                    #print([perc_e1, perc_e0, 
-                    #       perc_em1, perc_em2, 
-                    #       perc_em3, perc_em4, 
-                    #       perc_em5, perc_em6])
                     percs = np.vstack([percs, [perc_e1, perc_e0, 
                                             perc_em1, perc_em2, 
                                             perc_em3, perc_em4, 
                                             perc_em5, perc_em6]])
-                    y_true_train_pred_trials = np.vstack([y_true_train_pred_trials, y_true_train])#y_true_train_pred.transpose()])
+                    y_true_train_pred_trials = np.vstack([y_true_train_pred_trials, y_true_train])
                     y_DNN_test_pred_trials = np.vstack([y_DNN_test_pred_trials, y_DNN_test_pred])
                     y_DNN_train_pred_trials = np.vstack([y_DNN_train_pred_trials, y_DNN_train_pred])
                     
-
-                #"""
 
                 if args.make_plots and args.input_dim == 1:
                     fig = plt.figure(figsize = (30, 10))
@@ -1544,27 +1504,28 @@ if __name__ == '__main__':
                     plt.close(fig)
                     #plt.clf()
 
-                #"""
                 sys.stdout.flush()
 
     # AFTERTEST: after testing all the trials, compute ensemble statistics
     if not args.train:
-        #print(np.sum(percs,0)/args.nb_trials)
-        #print(y_res_trials)
-        #print(y_res_trials[0])
-        #print(y_res_trials[1])
-        #avg_y_res = np.sum(y_res_trials,0)/args.nb_trials
 
+        # the final L2 error sum
         L2_err_sum = 0.0
+        # the L2 errors of each trial
         L2_errs_trials = np.zeros(args.nb_trials)
 
+        # iterate over the trials
         for j in range(args.nb_trials):
 
+            # flush the output
             sys.stdout.flush()
 
+            # get the result of the j-th trial
             y_DNN_test_pred_trial_j = y_DNN_test_pred_trials[j]
 
+            # the error of the j-th trial
             L2_err_trial_j = 0.0;
+
             if not args.MATLAB_data and args.input_dim == 1:
                 """ #uniform approx
                 L2_err_sum = 0.0
@@ -1605,26 +1566,36 @@ if __name__ == '__main__':
                 print('L2 error of trial ' + str(j).zfill(3) + ': ' + errfmt)
 
             # in higher dimension, we need to use a sparse grid rule to approx.
-            # the L2 error
+            # the L2 error, which requires the testing data from MATLAB
             else:
-                #print('y_DNN_test_pred_trial_j.shape = ')
-                #print(y_DNN_test_pred_trial_j.shape)
+
+                # reshape the data to match y true's data
                 y_DNN_test_pred_trial_j = np.array(y_DNN_test_pred_trial_j).reshape(args.output_dim,args.nb_test_points)
+
+                # compute the absolute difference on the testing points
                 absdiff_trial_j = abs(y_DNN_test_pred_trial_j - y_true_test_pred)
+
+                # the L2 error is computed with the sparse grid quadrature rule
                 L2_err_trial_j = np.sqrt(abs(np.sum(np.square(absdiff_trial_j)*quadrature_weights_test*2.0**(-1.0*args.input_dim))))
+                # store the result 
                 L2_errs_trials[j] = L2_err_trial_j
 
                 errfmt = "%6.8e" % L2_err_trial_j
                 print('L2 error of trial ' + str(j).zfill(3) + ': ' + errfmt)
 
+            # add the error to the running sum of errors
             L2_err_sum = L2_err_sum + L2_err_trial_j
 
+        # compute the average over the trials
         avg_L2_err = L2_err_sum/args.nb_trials
+
+        # compute the average absolute maximum of the weights and biases over the trials
         DNN_max_weight_avg = np.sum(DNN_max_weights_trials)/args.nb_trials
 
         print("Final average L2 error: %8.16e" % (avg_L2_err))
         print("Final average max weight: %8.4f" % (DNN_max_weight_avg))
 
+        # save the ensemble data for plotting
         ensemble_data = {}
         ensemble_data['avg_L2_err'] = avg_L2_err
         ensemble_data['L2_errs_trials'] = L2_errs_trials
@@ -1639,7 +1610,8 @@ if __name__ == '__main__':
         ensemble_data['tf_trainable_vars'] = tf_trainable_vars
         ensemble_data['sigma'] = sigma
 
-        sio.savemat(scratchdir + '/results/' + unique_run_ID + '/' + key + '/ensemble_data', ensemble_data)
+        # save the ensemble data as a MATLAB -v7.3 hdf5-compatible mat file
+        sio.savemat(scratchdir + '/results/' + unique_run_ID + '/' + key + '/ensemble_data.mat', ensemble_data)
 
         if args.make_plots and args.input_dim == 1:
             plt.clf()
